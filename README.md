@@ -78,9 +78,17 @@ TcpStats.exe --port 443
 # Verbose output (shows debug info)
 TcpStats.exe -v
 
+# CSV output (machine-readable format)
+TcpStats.exe --csv
+
 # Combined options
-TcpStats.exe --all --port 80 --no-pause
+TcpStats.exe --all --port 80
+
+# CSV with filtering
+TcpStats.exe --csv -p 1234
 ```
+
+**Note:** The tool outputs to the terminal and exits immediately. Perfect for scripting and automation.
 
 ## Why This Tool?
 
@@ -105,6 +113,31 @@ Useful for:
 - .NET Framework 4.0+ (already installed on modern Windows)
 
 ## Technical Details
+
+### CSV Output
+
+The `--csv` flag outputs data in comma-separated format for easy parsing and analysis:
+
+```cmd
+# Export to file
+TcpStats.exe --csv > tcp_stats.csv
+
+# Filter and export
+TcpStats.exe --csv -p 1234 > process_tcp.csv
+
+# Pipe to analysis tools
+TcpStats.exe --csv | grep "443"
+```
+
+**CSV Format:**
+- First row: Column headers
+- Subsequent rows: One row per TCP connection
+- First 4 columns: LocalIP, LocalPort, RemoteIP, RemotePort
+- Followed by 100+ TCP statistics columns
+- Empty fields indicate N/A or unavailable data
+- All numeric values, no formatting
+
+### API Details
 
 The tool uses Windows IP Helper APIs:
 - `GetExtendedTcpTable` - Enumerates all TCP connections
@@ -154,7 +187,7 @@ Created for network engineers who need detailed TCP visibility on Windows system
 ```powershell
 while ($true) { 
     Clear-Host
-    .\TcpStats.exe --no-pause
+    .\TcpStats.exe
     Start-Sleep -Seconds 5 
 }
 ```
