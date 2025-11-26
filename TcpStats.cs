@@ -21,6 +21,8 @@ namespace TcpStatsTool
 
             bool verbose = args.Contains("-v") || args.Contains("--verbose");
             bool showAll = args.Contains("-a") || args.Contains("--all");
+            bool ipv4Only = args.Contains("-4");
+            bool ipv6Only = args.Contains("-6");
             string filterPid = null;
             string filterPort = null;
 
@@ -34,23 +36,33 @@ namespace TcpStatsTool
 
             try
             {
-                var connections = GetTcpConnections();
+                var connections = new List<TcpConnectionInfo>();
+                
+                // Get IPv4 connections
+                if (!ipv6Only)
+                {
+                    connections.AddRange(GetTcpConnections());
+                }
+                
+                // Get IPv6 connections
+                if (!ipv4Only)
+                {
+                    connections.AddRange(GetTcp6Connections());
+                }
                 
                 if (!showAll)
-                    connections = connections.Where(c => c.dwState == MIB_TCP_STATE.ESTABLISHED).ToList();
+                    connections = connections.Where(c => c.State == MIB_TCP_STATE.ESTABLISHED).ToList();
 
                 if (!string.IsNullOrEmpty(filterPid))
                 {
                     uint pid = uint.Parse(filterPid);
-                    connections = connections.Where(c => c.dwOwningPid == pid).ToList();
+                    connections = connections.Where(c => c.Pid == pid).ToList();
                 }
 
                 if (!string.IsNullOrEmpty(filterPort))
                 {
                     ushort port = ushort.Parse(filterPort);
-                    connections = connections.Where(c => 
-                        (ushort)IPAddress.NetworkToHostOrder((short)c.dwLocalPort) == port ||
-                        (ushort)IPAddress.NetworkToHostOrder((short)c.dwRemotePort) == port).ToList();
+                    connections = connections.Where(c => c.LocalPort == port || c.RemotePort == port).ToList();
                 }
 
                 if (!csvOutput)
@@ -127,169 +139,179 @@ namespace TcpStatsTool
                 "FineRttVar,FineMaxRtt,FineMinRtt,FineSumRtt");
         }
 
-        static void OutputCsvRow(MIB_TCPROW_OWNER_PID conn)
+        static void OutputCsvRow(TcpConnectionInfo conn)
         {
-            string localAddr = new IPAddress(conn.dwLocalAddr).ToString();
-            string remoteAddr = new IPAddress(conn.dwRemoteAddr).ToString();
-            ushort localPort = (ushort)IPAddress.NetworkToHostOrder((short)conn.dwLocalPort);
-            ushort remotePort = (ushort)IPAddress.NetworkToHostOrder((short)conn.dwRemotePort);
-
-            // Create MIB_TCPROW for statistics query
-            var tcpRow = new MIB_TCPROW
-            {
-                dwState = conn.dwState,
-                dwLocalAddr = conn.dwLocalAddr,
-                dwLocalPort = conn.dwLocalPort,
-                dwRemoteAddr = conn.dwRemoteAddr,
-                dwRemotePort = conn.dwRemotePort
-            };
-
             // Try to enable and retrieve statistics
-            bool statsEnabled = EnableConnectionStats(ref tcpRow);
+            bool statsEnabled;
+            TCP_ESTATS_DATA_ROD_v0? data;
+            TCP_ESTATS_PATH_ROD_v0? path;
+            TCP_ESTATS_SND_CONG_ROD_v0? sndCong;
+            TCP_ESTATS_SEND_BUFF_ROD_v0? sendBuff;
+            TCP_ESTATS_REC_ROD_v0? rec;
+            TCP_ESTATS_OBS_REC_ROD_v0? obsRec;
+            TCP_ESTATS_BANDWIDTH_ROD_v0? bandwidth;
+            TCP_ESTATS_FINE_RTT_ROD_v0? fineRtt;
 
-            // Get all available statistics
-            var data = statsEnabled ? GetConnectionData(ref tcpRow) : null;
-            var path = statsEnabled ? GetPathStats(ref tcpRow) : null;
-            var sndCong = statsEnabled ? GetSndCongestionStats(ref tcpRow) : null;
-            var sendBuff = statsEnabled ? GetSendBuffStats(ref tcpRow) : null;
-            var rec = statsEnabled ? GetRecStats(ref tcpRow) : null;
-            var obsRec = statsEnabled ? GetObsRecStats(ref tcpRow) : null;
-            var bandwidth = statsEnabled ? GetBandwidthStats(ref tcpRow) : null;
-            var fineRtt = statsEnabled ? GetFineRttStats(ref tcpRow) : null;
+            if (conn.IsIPv6)
+            {
+                var row = conn.RowV6;
+                statsEnabled = EnableConnection6Stats(ref row);
+                data = statsEnabled ? GetConnection6Stats<TCP_ESTATS_DATA_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsData) : null;
+                path = statsEnabled ? GetConnection6Stats<TCP_ESTATS_PATH_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsPath) : null;
+                sndCong = statsEnabled ? GetConnection6Stats<TCP_ESTATS_SND_CONG_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsSndCong) : null;
+                sendBuff = statsEnabled ? GetConnection6Stats<TCP_ESTATS_SEND_BUFF_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsSendBuff) : null;
+                rec = statsEnabled ? GetConnection6Stats<TCP_ESTATS_REC_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsRec) : null;
+                obsRec = statsEnabled ? GetConnection6Stats<TCP_ESTATS_OBS_REC_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsObsRec) : null;
+                bandwidth = statsEnabled ? GetConnection6Stats<TCP_ESTATS_BANDWIDTH_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsBandwidth) : null;
+                fineRtt = statsEnabled ? GetConnection6Stats<TCP_ESTATS_FINE_RTT_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsFineRtt) : null;
+            }
+            else
+            {
+                var row = conn.RowV4;
+                statsEnabled = EnableConnectionStats(ref row);
+                data = statsEnabled ? GetConnectionStats<TCP_ESTATS_DATA_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsData) : null;
+                path = statsEnabled ? GetConnectionStats<TCP_ESTATS_PATH_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsPath) : null;
+                sndCong = statsEnabled ? GetConnectionStats<TCP_ESTATS_SND_CONG_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsSndCong) : null;
+                sendBuff = statsEnabled ? GetConnectionStats<TCP_ESTATS_SEND_BUFF_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsSendBuff) : null;
+                rec = statsEnabled ? GetConnectionStats<TCP_ESTATS_REC_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsRec) : null;
+                obsRec = statsEnabled ? GetConnectionStats<TCP_ESTATS_OBS_REC_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsObsRec) : null;
+                bandwidth = statsEnabled ? GetConnectionStats<TCP_ESTATS_BANDWIDTH_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsBandwidth) : null;
+                fineRtt = statsEnabled ? GetConnectionStats<TCP_ESTATS_FINE_RTT_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsFineRtt) : null;
+            }
 
             // Build CSV row
-            var row = string.Format("{0},{1},{2},{3},{4},{5}",
-                localAddr, localPort, remoteAddr, remotePort, conn.dwState, conn.dwOwningPid);
+            var csvRow = string.Format("{0},{1},{2},{3},{4},{5}",
+                conn.LocalAddress, conn.LocalPort, conn.RemoteAddress, conn.RemotePort, conn.State, conn.Pid);
 
             // Data transfer
             if (data.HasValue)
             {
                 var d = data.Value;
-                row += string.Format(",{0},{1},{2},{3},{4},{5},{6},{7}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4},{5},{6},{7}",
                     CsvValue(d.DataBytesOut), CsvValue(d.DataBytesIn), CsvValue(d.DataSegsOut), CsvValue(d.DataSegsIn),
                     CsvValue(d.SegsOut), CsvValue(d.SegsIn), CsvValue(d.ThruBytesAcked), CsvValue(d.ThruBytesReceived));
-                row += string.Format(",{0},{1},{2},{3},{4}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4}",
                     CsvValue(d.SegsRetrans), CsvValue(d.BytesRetrans), CsvValue(d.FastRetran), CsvValue(d.TimeoutEpisodes), d.SynRetrans);
-                row += string.Format(",{0},{1},{2}",
+                csvRow += string.Format(",{0},{1},{2}",
                     CsvValue(d.DupAcksIn), CsvValue(d.SoftErrors), CsvValue(d.SoftErrorReason));
-                row += string.Format(",{0},{1},{2},{3}",
+                csvRow += string.Format(",{0},{1},{2},{3}",
                     CsvValue(d.SndUna), CsvValue(d.SndNxt), CsvValue(d.SndMax), CsvValue(d.RcvNxt));
             }
             else
             {
-                row += new string(',', 22); // 23 fields
+                csvRow += new string(',', 22); // 23 fields
             }
 
             // Path metrics
             if (path.HasValue)
             {
                 var p = path.Value;
-                row += string.Format(",{0},{1},{2},{3},{4},{5},{6}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4},{5},{6}",
                     CsvValue(p.SampleRtt), CsvValue(p.SmoothedRtt), CsvValue(p.RttVar), CsvValue(p.MinRtt), 
                     CsvValue(p.MaxRtt), CsvValue(p.SumRtt), CsvValue(p.CountRtt));
-                row += string.Format(",{0},{1},{2},{3},{4},{5},{6},{7}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4},{5},{6},{7}",
                     CsvValue(p.CurRto), CsvValue(p.MinRto), CsvValue(p.MaxRto), CsvValue(p.Timeouts),
                     CsvValue(p.SubsequentTimeouts), CsvValue(p.CurTimeoutCount), CsvValue(p.AbruptTimeouts), CsvValue(p.SpuriousRtoDetections));
-                row += string.Format(",{0},{1},{2},{3}",
+                csvRow += string.Format(",{0},{1},{2},{3}",
                     CsvValue(p.PktsRetrans), CsvValue(p.BytesRetrans), CsvValue(p.FastRetran), CsvValue(p.RetranThresh));
-                row += string.Format(",{0},{1},{2},{3},{4}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4}",
                     CsvValue(p.DupAcksIn), CsvValue(p.SndDupAckEpisodes), CsvValue(p.SacksRcvd), CsvValue(p.SackBlocksRcvd), CsvValue(p.DsackDups));
-                row += string.Format(",{0},{1},{2},{3}",
+                csvRow += string.Format(",{0},{1},{2},{3}",
                     CsvValue(p.SumBytesReordered), CsvValue(p.NonRecovDa), CsvValue(p.NonRecovDaEpisodes), CsvValue(p.AckAfterFr));
-                row += string.Format(",{0},{1},{2},{3},{4},{5},{6}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4},{5},{6}",
                     CsvValue(p.CongSignals), CsvValue(p.EcnSignals), CsvValue(p.EceRcvd), CsvValue(p.PreCongSumCwnd),
                     CsvValue(p.PreCongSumRtt), CsvValue(p.PostCongSumRtt), CsvValue(p.PostCongCountRtt));
-                row += string.Format(",{0},{1},{2}",
+                csvRow += string.Format(",{0},{1},{2}",
                     CsvValue(p.CurMss), CsvValue(p.MaxMss), CsvValue(p.MinMss));
-                row += string.Format(",{0},{1}",
+                csvRow += string.Format(",{0},{1}",
                     CsvValue(p.SendStall), CsvValue(p.QuenchRcvd));
             }
             else
             {
-                row += new string(',', 41); // 42 fields
+                csvRow += new string(',', 41); // 42 fields
             }
 
             // Congestion control
             if (sndCong.HasValue)
             {
                 var s = sndCong.Value;
-                row += string.Format(",{0},{1},{2},{3},{4},{5},{6},{7},{8}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4},{5},{6},{7},{8}",
                     CsvValue(s.CurCwnd), CsvValue(s.CurSsthresh), CsvValue(s.MaxSsCwnd), CsvValue(s.MaxCaCwnd),
                     CsvValue(s.MaxSsthresh), CsvValue(s.MinSsthresh), CsvValue(s.SlowStart), CsvValue(s.CongAvoid), CsvValue(s.OtherReductions));
-                row += string.Format(",{0},{1},{2}",
+                csvRow += string.Format(",{0},{1},{2}",
                     CsvValue(s.SndLimTransRwin), CsvValue(s.SndLimTimeRwin), CsvValue(s.SndLimBytesRwin));
-                row += string.Format(",{0},{1},{2}",
+                csvRow += string.Format(",{0},{1},{2}",
                     CsvValue(s.SndLimTransCwnd), CsvValue(s.SndLimTimeCwnd), CsvValue(s.SndLimBytesCwnd));
-                row += string.Format(",{0},{1},{2}",
+                csvRow += string.Format(",{0},{1},{2}",
                     CsvValue(s.SndLimTransSnd), CsvValue(s.SndLimTimeSnd), CsvValue(s.SndLimBytesSnd));
             }
             else
             {
-                row += new string(',', 17); // 18 fields
+                csvRow += new string(',', 17); // 18 fields
             }
 
             // Send buffers
             if (sendBuff.HasValue)
             {
                 var sb = sendBuff.Value;
-                row += string.Format(",{0},{1},{2},{3}",
+                csvRow += string.Format(",{0},{1},{2},{3}",
                     CsvValue(sb.CurRetxQueue), CsvValue(sb.MaxRetxQueue), CsvValue(sb.CurAppWQueue), CsvValue(sb.MaxAppWQueue));
             }
             else
             {
-                row += new string(',', 3); // 4 fields
+                csvRow += new string(',', 3); // 4 fields
             }
 
             // Receive
             if (rec.HasValue)
             {
                 var r = rec.Value;
-                row += string.Format(",{0},{1},{2},{3},{4},{5},{6}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4},{5},{6}",
                     CsvValue(r.CurRwinSent), CsvValue(r.MaxRwinSent), CsvValue(r.MinRwinSent),
                     CsvValue(r.CurRwinRcvd), CsvValue(r.MaxRwinRcvd), CsvValue(r.MinRwinRcvd), CsvValue(r.LimRwin));
-                row += string.Format(",{0},{1}",
+                csvRow += string.Format(",{0},{1}",
                     r.WinScaleSent, r.WinScaleRcvd);
-                row += string.Format(",{0},{1},{2},{3},{4}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4}",
                     CsvValue(r.DupAckEpisodes), CsvValue(r.DupAcksOut), CsvValue(r.CeRcvd), CsvValue(r.EcnSent), CsvValue(r.EcnNoncesRcvd));
-                row += string.Format(",{0},{1},{2},{3}",
+                csvRow += string.Format(",{0},{1},{2},{3}",
                     CsvValue(r.CurReasmQueue), CsvValue(r.MaxReasmQueue), CsvValue(r.CurAppRQueue), CsvValue(r.MaxAppRQueue));
             }
             else
             {
-                row += new string(',', 17); // 18 fields
+                csvRow += new string(',', 17); // 18 fields
             }
 
             // Observed receive
             if (obsRec.HasValue)
             {
                 var or = obsRec.Value;
-                row += string.Format(",{0},{1},{2},{3},{4},{5}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4},{5}",
                     CsvValue(or.MinRtt), CsvValue(or.BaseRtt), CsvValue(or.CurRwinRcvd),
                     CsvValue(or.MaxRwinRcvd), CsvValue(or.MinRwinRcvd), or.WinScaleRcvd);
             }
             else
             {
-                row += new string(',', 5); // 6 fields
+                csvRow += new string(',', 5); // 6 fields
             }
 
             // Bandwidth
             if (bandwidth.HasValue)
             {
                 var bw = bandwidth.Value;
-                row += string.Format(",{0},{1},{2},{3},{4},{5}",
+                csvRow += string.Format(",{0},{1},{2},{3},{4},{5}",
                     CsvValue(bw.OutboundBandwidth), CsvValue(bw.InboundBandwidth), CsvValue(bw.OutboundInstability),
                     CsvValue(bw.InboundInstability), bw.OutboundBandwidthPeaked, bw.InboundBandwidthPeaked);
             }
             else
             {
-                row += new string(',', 5); // 6 fields
+                csvRow += new string(',', 5); // 6 fields
             }
 
             // Fine RTT (convert from microseconds to milliseconds)
             if (fineRtt.HasValue)
             {
                 var fr = fineRtt.Value;
-                row += string.Format(",{0},{1},{2},{3}",
+                csvRow += string.Format(",{0},{1},{2},{3}",
                     (fr.RttVar == uint.MaxValue) ? "" : (fr.RttVar / 1000.0).ToString("F3"),
                     (fr.MaxRtt == uint.MaxValue) ? "" : (fr.MaxRtt / 1000.0).ToString("F3"),
                     (fr.MinRtt == uint.MaxValue) ? "" : (fr.MinRtt / 1000.0).ToString("F3"),
@@ -297,10 +319,10 @@ namespace TcpStatsTool
             }
             else
             {
-                row += new string(',', 3); // 4 fields
+                csvRow += new string(',', 3); // 4 fields
             }
 
-            Console.WriteLine(row);
+            Console.WriteLine(csvRow);
         }
 
         static string FormatValue(uint value, string format = "N0")
@@ -321,30 +343,25 @@ namespace TcpStatsTool
             return value.ToString(format);
         }
 
-        static void DisplayConnectionStats(MIB_TCPROW_OWNER_PID conn, bool verbose)
+        static void DisplayConnectionStats(TcpConnectionInfo conn, bool verbose)
         {
-            string localAddr = new IPAddress(conn.dwLocalAddr).ToString();
-            string remoteAddr = new IPAddress(conn.dwRemoteAddr).ToString();
-            ushort localPort = (ushort)IPAddress.NetworkToHostOrder((short)conn.dwLocalPort);
-            ushort remotePort = (ushort)IPAddress.NetworkToHostOrder((short)conn.dwRemotePort);
-
             Console.WriteLine("╔═══════════════════════════════════════════════════════════════════");
-            Console.WriteLine(string.Format("║ {0}:{1} → {2}:{3}", localAddr, localPort, remoteAddr, remotePort));
-            Console.WriteLine(string.Format("║ State: {0,-15} PID: {1}", conn.dwState, conn.dwOwningPid));
+            Console.WriteLine(string.Format("║ {0}:{1} → {2}:{3} [{4}]", 
+                conn.LocalAddress, conn.LocalPort, conn.RemoteAddress, conn.RemotePort, 
+                conn.IsIPv6 ? "IPv6" : "IPv4"));
+            Console.WriteLine(string.Format("║ State: {0,-15} PID: {1}", conn.State, conn.Pid));
             Console.WriteLine("╠═══════════════════════════════════════════════════════════════════");
 
-            // Create MIB_TCPROW for statistics query
-            var tcpRow = new MIB_TCPROW
-            {
-                dwState = conn.dwState,
-                dwLocalAddr = conn.dwLocalAddr,
-                dwLocalPort = conn.dwLocalPort,
-                dwRemoteAddr = conn.dwRemoteAddr,
-                dwRemotePort = conn.dwRemotePort
-            };
-
             // Try to enable and retrieve statistics
-            bool statsEnabled = EnableConnectionStats(ref tcpRow);
+            bool statsEnabled;
+            if (conn.IsIPv6)
+            {
+                statsEnabled = EnableConnection6Stats(ref conn.RowV6);
+            }
+            else
+            {
+                statsEnabled = EnableConnectionStats(ref conn.RowV4);
+            }
             
             if (!statsEnabled)
             {
@@ -357,14 +374,39 @@ namespace TcpStatsTool
             }
 
             // Get all available statistics
-            var data = GetConnectionData(ref tcpRow);
-            var path = GetPathStats(ref tcpRow);
-            var sndCong = GetSndCongestionStats(ref tcpRow);
-            var sendBuff = GetSendBuffStats(ref tcpRow);
-            var rec = GetRecStats(ref tcpRow);
-            var obsRec = GetObsRecStats(ref tcpRow);
-            var bandwidth = GetBandwidthStats(ref tcpRow);
-            var fineRtt = GetFineRttStats(ref tcpRow);
+            TCP_ESTATS_DATA_ROD_v0? data;
+            TCP_ESTATS_PATH_ROD_v0? path;
+            TCP_ESTATS_SND_CONG_ROD_v0? sndCong;
+            TCP_ESTATS_SEND_BUFF_ROD_v0? sendBuff;
+            TCP_ESTATS_REC_ROD_v0? rec;
+            TCP_ESTATS_OBS_REC_ROD_v0? obsRec;
+            TCP_ESTATS_BANDWIDTH_ROD_v0? bandwidth;
+            TCP_ESTATS_FINE_RTT_ROD_v0? fineRtt;
+
+            if (conn.IsIPv6)
+            {
+                var row = conn.RowV6;
+                data = GetConnection6Stats<TCP_ESTATS_DATA_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsData);
+                path = GetConnection6Stats<TCP_ESTATS_PATH_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsPath);
+                sndCong = GetConnection6Stats<TCP_ESTATS_SND_CONG_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsSndCong);
+                sendBuff = GetConnection6Stats<TCP_ESTATS_SEND_BUFF_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsSendBuff);
+                rec = GetConnection6Stats<TCP_ESTATS_REC_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsRec);
+                obsRec = GetConnection6Stats<TCP_ESTATS_OBS_REC_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsObsRec);
+                bandwidth = GetConnection6Stats<TCP_ESTATS_BANDWIDTH_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsBandwidth);
+                fineRtt = GetConnection6Stats<TCP_ESTATS_FINE_RTT_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsFineRtt);
+            }
+            else
+            {
+                var row = conn.RowV4;
+                data = GetConnectionStats<TCP_ESTATS_DATA_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsData);
+                path = GetConnectionStats<TCP_ESTATS_PATH_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsPath);
+                sndCong = GetConnectionStats<TCP_ESTATS_SND_CONG_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsSndCong);
+                sendBuff = GetConnectionStats<TCP_ESTATS_SEND_BUFF_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsSendBuff);
+                rec = GetConnectionStats<TCP_ESTATS_REC_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsRec);
+                obsRec = GetConnectionStats<TCP_ESTATS_OBS_REC_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsObsRec);
+                bandwidth = GetConnectionStats<TCP_ESTATS_BANDWIDTH_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsBandwidth);
+                fineRtt = GetConnectionStats<TCP_ESTATS_FINE_RTT_ROD_v0>(ref row, TCP_ESTATS_TYPE.TcpConnectionEstatsFineRtt);
+            }
 
             // Display data statistics - comprehensive view
             if (data.HasValue)
@@ -632,6 +674,87 @@ namespace TcpStatsTool
             return anyEnabled;
         }
 
+        static bool EnableConnection6Stats(ref MIB_TCP6ROW row)
+        {
+            // Enable all available statistics types for IPv6
+            var statsTypes = new[]
+            {
+                TCP_ESTATS_TYPE.TcpConnectionEstatsData,
+                TCP_ESTATS_TYPE.TcpConnectionEstatsPath,
+                TCP_ESTATS_TYPE.TcpConnectionEstatsSndCong,
+                TCP_ESTATS_TYPE.TcpConnectionEstatsSendBuff,
+                TCP_ESTATS_TYPE.TcpConnectionEstatsRec,
+                TCP_ESTATS_TYPE.TcpConnectionEstatsObsRec,
+                TCP_ESTATS_TYPE.TcpConnectionEstatsBandwidth,
+                TCP_ESTATS_TYPE.TcpConnectionEstatsFineRtt
+            };
+
+            bool anyEnabled = false;
+
+            foreach (var type in statsTypes)
+            {
+                var rw = new TCP_ESTATS_DATA_RW_v0 { EnableCollection = 1 };
+                int rwSize = Marshal.SizeOf(typeof(TCP_ESTATS_DATA_RW_v0));
+                
+                IntPtr rwPtr = Marshal.AllocHGlobal(rwSize);
+                try
+                {
+                    Marshal.StructureToPtr(rw, rwPtr, false);
+                    
+                    uint result = SetPerTcp6ConnectionEStats(
+                        ref row,
+                        type,
+                        rwPtr,
+                        0,
+                        rwSize,
+                        0
+                    );
+
+                    if (result == 0)
+                        anyEnabled = true;
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(rwPtr);
+                }
+            }
+
+            return anyEnabled;
+        }
+
+        static T? GetConnection6Stats<T>(ref MIB_TCP6ROW row, TCP_ESTATS_TYPE type) where T : struct
+        {
+            int rodSize = Marshal.SizeOf(typeof(T));
+            IntPtr rodPtr = Marshal.AllocHGlobal(rodSize);
+
+            try
+            {
+                // Zero the memory buffer before calling API
+                byte[] zeros = new byte[rodSize];
+                Marshal.Copy(zeros, 0, rodPtr, rodSize);
+                
+                uint result = GetPerTcp6ConnectionEStats(
+                    ref row,
+                    type,
+                    IntPtr.Zero, 0, 0,
+                    IntPtr.Zero, 0, 0,
+                    rodPtr, 0, rodSize
+                );
+
+                if (result == 0)
+                {
+                    return (T)Marshal.PtrToStructure(rodPtr, typeof(T));
+                }
+            }
+            catch { }
+            finally
+            {
+                Marshal.FreeHGlobal(rodPtr);
+            }
+
+            return null;
+        }
+
         static TCP_ESTATS_DATA_ROD_v0? GetConnectionData(ref MIB_TCPROW row)
         {
             return GetConnectionStats<TCP_ESTATS_DATA_ROD_v0>(
@@ -729,9 +852,30 @@ namespace TcpStatsTool
             return null;
         }
 
-        static List<MIB_TCPROW_OWNER_PID> GetTcpConnections()
+        // Unified connection info for both IPv4 and IPv6
+        class TcpConnectionInfo
         {
-            var connections = new List<MIB_TCPROW_OWNER_PID>();
+            public IPAddress LocalAddress;
+            public ushort LocalPort;
+            public IPAddress RemoteAddress;
+            public ushort RemotePort;
+            public MIB_TCP_STATE State;
+            public uint Pid;
+            public bool IsIPv6;
+            
+            // For statistics queries
+            public MIB_TCPROW RowV4;
+            public MIB_TCP6ROW RowV6;
+        }
+
+        static IPAddress BytesToIPAddress(byte[] bytes)
+        {
+            return new IPAddress(bytes);
+        }
+
+        static List<TcpConnectionInfo> GetTcpConnections()
+        {
+            var connections = new List<TcpConnectionInfo>();
             int bufferSize = 0;
 
             uint result = GetExtendedTcpTable(IntPtr.Zero, ref bufferSize, true,
@@ -756,8 +900,93 @@ namespace TcpStatsTool
                 {
                     var row = (MIB_TCPROW_OWNER_PID)Marshal.PtrToStructure(
                         rowPtr, typeof(MIB_TCPROW_OWNER_PID));
-                    connections.Add(row);
+                    
+                    var connInfo = new TcpConnectionInfo
+                    {
+                        LocalAddress = new IPAddress(row.dwLocalAddr),
+                        LocalPort = (ushort)IPAddress.NetworkToHostOrder((short)row.dwLocalPort),
+                        RemoteAddress = new IPAddress(row.dwRemoteAddr),
+                        RemotePort = (ushort)IPAddress.NetworkToHostOrder((short)row.dwRemotePort),
+                        State = row.dwState,
+                        Pid = row.dwOwningPid,
+                        IsIPv6 = false,
+                        RowV4 = new MIB_TCPROW
+                        {
+                            dwState = row.dwState,
+                            dwLocalAddr = row.dwLocalAddr,
+                            dwLocalPort = row.dwLocalPort,
+                            dwRemoteAddr = row.dwRemoteAddr,
+                            dwRemotePort = row.dwRemotePort
+                        }
+                    };
+                    
+                    connections.Add(connInfo);
                     rowPtr = (IntPtr)((long)rowPtr + Marshal.SizeOf(typeof(MIB_TCPROW_OWNER_PID)));
+                }
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(tcpTablePtr);
+            }
+
+            return connections;
+        }
+
+        static List<TcpConnectionInfo> GetTcp6Connections()
+        {
+            var connections = new List<TcpConnectionInfo>();
+            int bufferSize = 0;
+
+            uint result = GetExtendedTcpTable(IntPtr.Zero, ref bufferSize, true,
+                AF_INET6, TCP_TABLE_CLASS.TCP_TABLE_OWNER_PID_ALL, 0);
+
+            IntPtr tcpTablePtr = Marshal.AllocHGlobal(bufferSize);
+
+            try
+            {
+                result = GetExtendedTcpTable(tcpTablePtr, ref bufferSize, true,
+                    AF_INET6, TCP_TABLE_CLASS.TCP_TABLE_OWNER_PID_ALL, 0);
+
+                if (result != 0)
+                {
+                    // IPv6 may not be available on all systems
+                    Marshal.FreeHGlobal(tcpTablePtr);
+                    return connections;
+                }
+
+                var table = (MIB_TCP6TABLE_OWNER_PID)Marshal.PtrToStructure(
+                    tcpTablePtr, typeof(MIB_TCP6TABLE_OWNER_PID));
+                
+                IntPtr rowPtr = (IntPtr)((long)tcpTablePtr + Marshal.SizeOf(table.dwNumEntries));
+
+                for (int i = 0; i < table.dwNumEntries; i++)
+                {
+                    var row = (MIB_TCP6ROW_OWNER_PID)Marshal.PtrToStructure(
+                        rowPtr, typeof(MIB_TCP6ROW_OWNER_PID));
+                    
+                    var connInfo = new TcpConnectionInfo
+                    {
+                        LocalAddress = BytesToIPAddress(row.ucLocalAddr),
+                        LocalPort = (ushort)IPAddress.NetworkToHostOrder((short)row.dwLocalPort),
+                        RemoteAddress = BytesToIPAddress(row.ucRemoteAddr),
+                        RemotePort = (ushort)IPAddress.NetworkToHostOrder((short)row.dwRemotePort),
+                        State = row.dwState,
+                        Pid = row.dwOwningPid,
+                        IsIPv6 = true,
+                        RowV6 = new MIB_TCP6ROW
+                        {
+                            LocalAddr = row.ucLocalAddr,
+                            LocalScopeId = row.dwLocalScopeId,
+                            LocalPort = row.dwLocalPort,
+                            RemoteAddr = row.ucRemoteAddr,
+                            RemoteScopeId = row.dwRemoteScopeId,
+                            RemotePort = row.dwRemotePort,
+                            State = row.dwState
+                        }
+                    };
+                    
+                    connections.Add(connInfo);
+                    rowPtr = (IntPtr)((long)rowPtr + Marshal.SizeOf(typeof(MIB_TCP6ROW_OWNER_PID)));
                 }
             }
             finally
@@ -771,6 +1000,7 @@ namespace TcpStatsTool
         #region Windows API
 
         const int AF_INET = 2;
+        const int AF_INET6 = 23;
 
         [DllImport("iphlpapi.dll", SetLastError = true)]
         static extern uint GetExtendedTcpTable(
@@ -795,6 +1025,25 @@ namespace TcpStatsTool
         [DllImport("iphlpapi.dll", SetLastError = true)]
         static extern uint GetPerTcpConnectionEStats(
             ref MIB_TCPROW Row,
+            TCP_ESTATS_TYPE EstatsType,
+            IntPtr Rw, uint RwVersion, int RwSize,
+            IntPtr Ros, uint RosVersion, int RosSize,
+            IntPtr Rod, uint RodVersion, int RodSize
+        );
+
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        static extern uint SetPerTcp6ConnectionEStats(
+            ref MIB_TCP6ROW Row,
+            TCP_ESTATS_TYPE EstatsType,
+            IntPtr Rw,
+            uint RwVersion,
+            int RwSize,
+            uint Offset
+        );
+
+        [DllImport("iphlpapi.dll", SetLastError = true)]
+        static extern uint GetPerTcp6ConnectionEStats(
+            ref MIB_TCP6ROW Row,
             TCP_ESTATS_TYPE EstatsType,
             IntPtr Rw, uint RwVersion, int RwSize,
             IntPtr Ros, uint RosVersion, int RosSize,
@@ -869,6 +1118,41 @@ namespace TcpStatsTool
             public uint dwLocalPort;
             public uint dwRemoteAddr;
             public uint dwRemotePort;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MIB_TCP6TABLE_OWNER_PID
+        {
+            public uint dwNumEntries;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MIB_TCP6ROW_OWNER_PID
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] ucLocalAddr;
+            public uint dwLocalScopeId;
+            public uint dwLocalPort;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] ucRemoteAddr;
+            public uint dwRemoteScopeId;
+            public uint dwRemotePort;
+            public MIB_TCP_STATE dwState;
+            public uint dwOwningPid;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct MIB_TCP6ROW
+        {
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] LocalAddr;
+            public uint LocalScopeId;
+            public uint LocalPort;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+            public byte[] RemoteAddr;
+            public uint RemoteScopeId;
+            public uint RemotePort;
+            public MIB_TCP_STATE State;
         }
 
         [StructLayout(LayoutKind.Sequential)]
